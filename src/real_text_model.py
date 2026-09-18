@@ -100,7 +100,39 @@ def score_reviews(texts: list[str]) -> list[float]:
     return pipe.predict_proba(texts)[:, 1].tolist()
 
 
+def top_indicative_terms(n: int = 15, path: Path = DATA_PATH) -> dict[str, list[str]]:
+    """Words most predictive of each class, from the linear model weights.
+
+    This is the model's explainability window: which n-grams push a review
+    toward 'deceptive' vs 'truthful'.
+    """
+    texts, labels = load_corpus(path)
+    pipe = build_pipeline().fit(texts, labels)
+    vocab = np.asarray(pipe.named_steps["tfidf"].get_feature_names_out())
+    coef = pipe.named_steps["clf"].coef_[0]          # label 1 = deceptive
+    order = coef.argsort()
+    return {
+        "deceptive": vocab[order[-n:]][::-1].tolist(),
+        "truthful": vocab[order[:n]].tolist(),
+    }
+
+
+def explain_review(text: str) -> dict:
+    """Score one review and return the interpretable feature breakdown."""
+    from src.linguistic_features import FEATURE_NAMES, extract
+
+    prob = score_reviews([text])[0]
+    return {
+        "prob_deceptive": prob,
+        "verdict": "deceptive" if prob >= 0.5 else "truthful",
+        "linguistic": dict(zip(FEATURE_NAMES, extract(text))),
+    }
+
+
 if __name__ == "__main__":
     evaluate()
     train_and_save()
+    terms = top_indicative_terms()
+    print("\nMost 'deceptive' terms:", ", ".join(terms["deceptive"]))
+    print("Most 'truthful'  terms:", ", ".join(terms["truthful"]))
     print(f"\nSaved trained model to {MODEL_PATH}")

@@ -75,6 +75,39 @@ gold-labeled reviews and reports 5-fold cross-validated performance:
 this corpus — deceptive reviews are detectable from text but far from
 trivially so, which is the honest, real-world number.
 
+#### Feature ablation — do stylometric features help?
+
+A common approach in the literature is to add hand-crafted linguistic
+features (superlative density, first-person pronoun use, exclamation/caps
+ratios, lexical diversity — `src/linguistic_features.py`) on top of the
+n-grams. `python -m src.ablation` tests whether they actually help here,
+under identical 5-fold CV:
+
+| Representation | Accuracy | F1 |
+|----------------|----------|----|
+| **TF-IDF only** | **0.895** | **0.896** |
+| Linguistic only | 0.636 | 0.634 |
+| TF-IDF + Linguistic | 0.882 | 0.884 |
+
+The honest result: the stylometric features carry real signal on their own
+(0.64 ≫ 0.50 chance) but **do not improve on TF-IDF n-grams** for this
+corpus — a finding that matches Ott et al., where n-grams dominate. They're
+kept for **interpretability**, not for a headline number.
+
+#### Explainability
+
+`top_indicative_terms()` reads the linear model's weights to show *why* it
+decides. The terms it learns line up with the deception literature —
+truthful reviews use concrete, spatial detail; deceptive ones lean on
+emotive, imaginative language:
+
+- **Most "deceptive":** luxury, experience, vacation, luxurious, husband, definitely, recently
+- **Most "truthful":** location, floor, small, street, breakfast, construction, concierge, river
+
+`explain_review(text)` returns the deceptive probability plus the linguistic
+breakdown for a single review, and `app_streamlit.py` wraps this in a
+paste-a-review demo UI (`streamlit run app_streamlit.py`).
+
 ### Full pipeline — synthetic manipulation benchmark
 
 `python -m src.evaluate` runs the combined text + behavioral score against
@@ -111,7 +144,9 @@ Fake-Review-Rating-Manipulation-Detector/
 │   ├── deceptive-opinion.csv   # real Ott et al. labeled corpus (1,600 reviews)
 │   └── README.md               # dataset sources, citation, license
 ├── src/
-│   ├── real_text_model.py      # TF-IDF + classifier on the REAL labeled corpus
+│   ├── real_text_model.py      # TF-IDF + classifier on the REAL labeled corpus (+ explainability)
+│   ├── linguistic_features.py  # interpretable stylometric features
+│   ├── ablation.py             # TF-IDF vs. linguistic vs. combined comparison
 │   ├── data_generator.py       # builds the synthetic restaurants/reviews/accounts dataset
 │   ├── text_features.py        # text-suspicion model for the synthetic pipeline
 │   ├── behavioral_features.py  # burst / uniformity / account-cluster anomaly detection
@@ -121,6 +156,7 @@ Fake-Review-Rating-Manipulation-Detector/
 ├── tests/
 │   ├── test_pipeline.py        # behavioral-detector unit tests
 │   └── test_real_text_model.py # real text-model tests
+├── app_streamlit.py            # paste-a-review demo UI
 ├── requirements.txt
 └── README.md
 ```
@@ -132,18 +168,29 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-python -m src.real_text_model    # real corpus: 5-fold CV report + saves model
+python -m src.real_text_model    # real corpus: 5-fold CV report + top terms + saves model
+python -m src.ablation           # TF-IDF vs. linguistic vs. combined
 python -m src.data_generator     # builds the synthetic benchmark (data/*.parquet)
 python -m src.evaluate           # combined pipeline precision/recall/confusion matrix
 pytest                           # run the unit tests
 
 uvicorn src.api:app --reload     # scoring API on http://localhost:8000
+streamlit run app_streamlit.py   # interactive demo UI
 ```
 
 ## Tech stack
 
 Python · pandas · NumPy · scikit-learn (TF-IDF, Logistic Regression / SVM / NB) ·
-FastAPI · pytest
+FastAPI · Streamlit · pytest
+
+## Possible next steps
+
+- A transformer classifier (e.g. fine-tuned BERT) — reported to reach the
+  low-to-mid 90s on this corpus — as a stronger, heavier alternative to the
+  TF-IDF model here.
+- Adversarial/noisier synthetic manipulation data to stress-test the
+  behavioral detector, and, in production, restaurant-level labels from real
+  moderation/takedown actions.
 
 ## Dataset citation
 
