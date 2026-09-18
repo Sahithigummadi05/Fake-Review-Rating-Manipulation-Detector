@@ -40,31 +40,45 @@ Reviews + rating history
 ```
 
 The behavioral signal is weighted higher (0.6 vs. 0.4) because it is the
-harder signal to fake and the more reliable of the two; the text model is
-trained on weaker labels and is intentionally the secondary signal.
+harder signal to fake and the more reliable of the two.
 
-## Dataset
+## Datasets
 
-There is no public, reliably-labeled dataset that pairs restaurant review
-*text* with *rating-manipulation ground truth* — real platforms don't
-publish which restaurants they've caught gaming ratings. So this project
-uses a **synthetic dataset** with known ground truth:
+The two signals are evaluated on two different datasets, because they need
+different kinds of ground truth (see [`data/README.md`](data/README.md)):
 
-- **~500 organic restaurants** — natural rating distributions (per-restaurant
-  mean rating, realistic variance, a steady low review rate over time, and
-  reviewer accounts with varied activity history).
-- **~100 manipulated restaurants** — injected with one or more fraud patterns:
-  a burst of reviews in a short window, unusually uniform 5-star ratings,
-  and/or a cluster of reviews from low-activity/new accounts.
-
-Because the labels are injected by the generator, ground truth is known
-exactly, which makes real precision/recall evaluation possible
-(`src/evaluate.py`).
+- **Text model → real labeled data.** The **Deceptive Opinion Spam Corpus**
+  (Ott et al., 2011): 1,600 hotel reviews, 800 genuine (crawled from
+  TripAdvisor/Expedia/etc.) and 800 deceptive (crowd-written on Amazon
+  Mechanical Turk). Human ground-truth labels, so the text classifier is
+  measured on real deceptive-vs-truthful separability.
+- **Behavioral detector → synthetic benchmark.** No public dataset labels
+  which *restaurants* have had their ratings manipulated, so
+  `src/data_generator.py` synthesizes 500 organic + 100 manipulated
+  restaurants with known injected fraud patterns (review bursts, uniform
+  5-star clusters, new-account clusters) to test the pattern detection.
 
 ## Results
 
-Running `python -m src.evaluate` on the default synthetic dataset
-(500 organic + 100 manipulated restaurants) sweeps the decision threshold:
+### Text-suspicion model — real data (Ott Deceptive Opinion Spam Corpus)
+
+`python -m src.real_text_model` trains a TF-IDF + classifier on the 1,600
+gold-labeled reviews and reports 5-fold cross-validated performance:
+
+| Model | Accuracy | F1 |
+|-------|----------|----|
+| **Logistic Regression** | **0.895** | **0.896** |
+| Linear SVM | 0.890 | 0.892 |
+| Multinomial NB | 0.886 | 0.890 |
+
+~89% accuracy on held-out folds is consistent with published results on
+this corpus — deceptive reviews are detectable from text but far from
+trivially so, which is the honest, real-world number.
+
+### Full pipeline — synthetic manipulation benchmark
+
+`python -m src.evaluate` runs the combined text + behavioral score against
+the injected restaurant-level ground truth, sweeping the threshold:
 
 | Threshold | Precision | Recall |
 |-----------|-----------|--------|
@@ -73,37 +87,40 @@ Running `python -m src.evaluate` on the default synthetic dataset
 | 0.6       | 0.60      | 1.00   |
 | **0.7**   | **1.00**  | **1.00** |
 
-At the tuned operating point (0.7) the combined score flags every
-manipulated restaurant with no false positives
-(confusion matrix `[[500, 0], [0, 100]]`), while the sweep shows how
-precision climbs as the threshold tightens at full recall.
+At threshold 0.7 the combined score flags every injected manipulation
+campaign with no false positives, and the sweep shows precision climbing as
+the threshold tightens at full recall.
 
 ## Limitations
 
-The clean separation reflects that the synthetic generator injects a
-strong, distinct fraud signature that does not overlap with the organic
-distribution. Real-world manipulation is noisier and adversarial —
-fraudsters vary ratings, spread reviews over time, and use aged or
-purchased accounts specifically to evade detectors like this. These results
-show the pipeline is correct end-to-end and that each signal contributes;
-the natural next step is stress-testing against noisier, adversarial
-synthetic data (and, in production, labels from real moderation/takedown
-data) to find where detection degrades.
+On the synthetic benchmark the separation is clean because the generator
+injects a strong, distinct fraud signature; that result validates the
+pipeline end-to-end rather than predicting live-platform accuracy. Real
+manipulation is noisier and adversarial — fraudsters vary ratings, spread
+reviews over time, and use aged/purchased accounts to evade detectors like
+this. The **real number to trust is the ~89% on the human-labeled text
+corpus**; the natural next steps are adversarial synthetic data for the
+behavioral module and, in production, restaurant-level labels from real
+moderation/takedown data.
 
 ## Project layout
 
 ```
 Fake-Review-Rating-Manipulation-Detector/
-├── data/                       # generated synthetic dataset lands here
+├── data/
+│   ├── deceptive-opinion.csv   # real Ott et al. labeled corpus (1,600 reviews)
+│   └── README.md               # dataset sources, citation, license
 ├── src/
+│   ├── real_text_model.py      # TF-IDF + classifier on the REAL labeled corpus
 │   ├── data_generator.py       # builds the synthetic restaurants/reviews/accounts dataset
-│   ├── text_features.py        # TF-IDF + classifier for templated-text suspicion
+│   ├── text_features.py        # text-suspicion model for the synthetic pipeline
 │   ├── behavioral_features.py  # burst / uniformity / account-cluster anomaly detection
 │   ├── fraud_scorer.py         # combines both signals into a final score
 │   ├── evaluate.py             # precision/recall/confusion matrix against ground truth
 │   └── api.py                  # FastAPI endpoint to score a restaurant
 ├── tests/
-│   └── test_pipeline.py
+│   ├── test_pipeline.py        # behavioral-detector unit tests
+│   └── test_real_text_model.py # real text-model tests
 ├── requirements.txt
 └── README.md
 ```
@@ -115,8 +132,9 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-python -m src.data_generator     # builds data/*.parquet
-python -m src.evaluate           # trains + prints precision/recall/confusion matrix
+python -m src.real_text_model    # real corpus: 5-fold CV report + saves model
+python -m src.data_generator     # builds the synthetic benchmark (data/*.parquet)
+python -m src.evaluate           # combined pipeline precision/recall/confusion matrix
 pytest                           # run the unit tests
 
 uvicorn src.api:app --reload     # scoring API on http://localhost:8000
@@ -124,4 +142,11 @@ uvicorn src.api:app --reload     # scoring API on http://localhost:8000
 
 ## Tech stack
 
-Python · pandas · NumPy · scikit-learn (TF-IDF, classifier) · FastAPI · pytest
+Python · pandas · NumPy · scikit-learn (TF-IDF, Logistic Regression / SVM / NB) ·
+FastAPI · pytest
+
+## Dataset citation
+
+Ott, Choi, Cardie, Hancock. *Finding Deceptive Opinion Spam by Any Stretch
+of the Imagination.* ACL 2011. See [`data/README.md`](data/README.md) for
+details and license.
